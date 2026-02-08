@@ -48,9 +48,12 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+<<<<<<< HEAD
 =======
 node_modules/
 .env
 dist/
 build/
 
+=======
+>>>>>>> 96d0494f7200f6083fd5676ea0e58def7f190188
