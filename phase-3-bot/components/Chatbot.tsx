@@ -23,12 +23,12 @@ const Chatbot: React.FC<ChatbotProps> = ({ todos, onAdd, onUpdate, onDelete, onT
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
   
   const chatSessionRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  
-  // Use a ref to always have access to the latest todos during async operations
   const todosRef = useRef(todos);
+
   useEffect(() => {
     todosRef.current = todos;
   }, [todos]);
@@ -39,6 +39,12 @@ const Chatbot: React.FC<ChatbotProps> = ({ todos, onAdd, onUpdate, onDelete, onT
     }
   }, [messages, isOpen]);
 
+  const resetSession = () => {
+    chatSessionRef.current = null;
+    setHasError(false);
+    setMessages(prev => [...prev, { role: 'assistant', text: "Session reset. I'm ready to help again!" }]);
+  };
+
   const handleSendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
@@ -46,6 +52,7 @@ const Chatbot: React.FC<ChatbotProps> = ({ todos, onAdd, onUpdate, onDelete, onT
     setMessages(prev => [...prev, { role: 'user', text: userMessage }]);
     setInput('');
     setIsLoading(true);
+    setHasError(false);
 
     try {
       if (!chatSessionRef.current) {
@@ -54,36 +61,32 @@ const Chatbot: React.FC<ChatbotProps> = ({ todos, onAdd, onUpdate, onDelete, onT
 
       let currentResponse = await chatSessionRef.current.sendMessage({ message: userMessage });
       
-      // We use a loop to handle the "thought process" if the model calls tools sequentially
-      // or if it needs to verify something after calling get_all_tasks.
-      let turnLimit = 5; // Safety to prevent infinite loops
-      
+      let turnLimit = 5;
       while (currentResponse.functionCalls && turnLimit > 0) {
         turnLimit--;
         const results: string[] = [];
         
         for (const call of currentResponse.functionCalls) {
-          let resultText = "Task not found or action failed.";
+          let resultText = "Task not found.";
           
           switch (call.name) {
             case 'add_task':
               onAdd(call.args.title, call.args.description || "");
-              resultText = `Task "${call.args.title}" added successfully.`;
+              resultText = `Success: Task "${call.args.title}" added.`;
               break;
             case 'update_task':
               onUpdate(call.args.id, call.args.title, call.args.description);
-              resultText = `Task with ID ${call.args.id} updated successfully.`;
+              resultText = `Success: Task updated.`;
               break;
             case 'delete_task':
               onDelete(call.args.id);
-              resultText = `Task with ID ${call.args.id} deleted successfully.`;
+              resultText = `Success: Task deleted.`;
               break;
             case 'toggle_task':
               onToggle(call.args.id);
-              resultText = `Status of task with ID ${call.args.id} toggled.`;
+              resultText = `Success: Completion status toggled.`;
               break;
             case 'get_all_tasks':
-              // Use the ref to get the absolute latest state
               resultText = JSON.stringify(todosRef.current.map(t => ({ 
                 id: t.id, 
                 title: t.title, 
@@ -91,22 +94,31 @@ const Chatbot: React.FC<ChatbotProps> = ({ todos, onAdd, onUpdate, onDelete, onT
               })));
               break;
           }
-          results.push(`Result of ${call.name}: ${resultText}`);
+          results.push(`Execution Result: ${resultText}`);
         }
 
-        // Send the execution results back to the model
         currentResponse = await chatSessionRef.current.sendMessage({
           message: results.join('\n')
         });
       }
 
-      // Final response from the model after all tool calls are resolved
       if (currentResponse.text) {
         setMessages(prev => [...prev, { role: 'assistant', text: currentResponse.text }]);
       }
-    } catch (error) {
-      console.error("Chat Error:", error);
-      setMessages(prev => [...prev, { role: 'assistant', text: "I encountered an error while processing your request. Please try again." }]);
+    } catch (error: any) {
+      console.error("TaskFlow Assistant Error:", error);
+      setHasError(true);
+      let errorMessage = "I encountered an error while processing your request.";
+      
+      if (error?.message?.includes("API Key is missing")) {
+        errorMessage = "Error: API Key is not configured. Please check your Vercel environment variables.";
+      } else if (error?.message?.includes("Rpc failed") || error?.status === "UNKNOWN") {
+        errorMessage = "Error: Connection lost with Google AI services. Please try again or reset the session.";
+      }
+
+      setMessages(prev => [...prev, { role: 'assistant', text: errorMessage }]);
+      // Force session clear on catastrophic error
+      chatSessionRef.current = null;
     } finally {
       setIsLoading(false);
     }
@@ -122,8 +134,8 @@ const Chatbot: React.FC<ChatbotProps> = ({ todos, onAdd, onUpdate, onDelete, onT
               <div>
                 <h4 className="font-black text-sm uppercase tracking-widest">TaskFlow Assistant</h4>
                 <div className="flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></div>
-                  <span className="text-[10px] font-bold text-white/70">Online</span>
+                  <div className={`w-1.5 h-1.5 ${isLoading ? 'bg-amber-400' : 'bg-emerald-400'} rounded-full animate-pulse`}></div>
+                  <span className="text-[10px] font-bold text-white/70">{isLoading ? 'Thinking...' : 'Online'}</span>
                 </div>
               </div>
             </div>
@@ -155,17 +167,29 @@ const Chatbot: React.FC<ChatbotProps> = ({ todos, onAdd, onUpdate, onDelete, onT
                 </div>
               </div>
             )}
+            {hasError && (
+              <div className="flex justify-center pt-2">
+                <button 
+                  onClick={resetSession}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-black rounded-full transition-colors flex items-center gap-2"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                  Reset Session
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="p-6 bg-white border-t border-slate-100">
             <div className="relative flex items-center">
               <input 
                 type="text" 
-                placeholder="Ask me to delete 'Task X'..."
+                placeholder="Message assistant..."
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
                 className="w-full pl-5 pr-14 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition-all text-sm font-bold placeholder-slate-400"
+                disabled={isLoading}
               />
               <button 
                 onClick={handleSendMessage}
@@ -183,7 +207,6 @@ const Chatbot: React.FC<ChatbotProps> = ({ todos, onAdd, onUpdate, onDelete, onT
           className="w-16 h-16 bg-indigo-600 text-white rounded-[2rem] shadow-2xl shadow-indigo-200 flex items-center justify-center hover:scale-110 active:scale-95 transition-all animate-fade-in group"
         >
           <svg className="w-7 h-7 group-hover:rotate-12 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
-          <div className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 border-2 border-white rounded-full flex items-center justify-center text-[10px] font-black">1</div>
         </button>
       )}
     </div>

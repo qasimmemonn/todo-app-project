@@ -1,8 +1,6 @@
 
 import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
-
 const taskTools: FunctionDeclaration[] = [
   {
     name: 'add_task',
@@ -56,12 +54,21 @@ const taskTools: FunctionDeclaration[] = [
     description: 'Retrieve the current list of tasks to see titles and IDs. Call this if you do not know the ID of a task the user mentioned.',
     parameters: {
       type: Type.OBJECT,
-      properties: {},
+      properties: {
+        // Explicitly defining an unused property can sometimes help with stricter OpenAPI proxies
+        _internal: { type: Type.STRING, description: 'Internal marker' }
+      },
     },
   },
 ];
 
 export const startChatSession = () => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("Gemini API Key is missing. Please set API_KEY in your environment variables.");
+  }
+  
+  const ai = new GoogleGenAI({ apiKey });
   return ai.chats.create({
     model: 'gemini-3-flash-preview',
     config: {
@@ -69,19 +76,21 @@ export const startChatSession = () => {
       
       CRITICAL RULES:
       1. If the user asks to update, delete, or complete a task by its name/title, you MUST call 'get_all_tasks' first to find the corresponding 'id'. Do not guess IDs.
-      2. After calling 'get_all_tasks', identify the task the user is referring to and then call the appropriate management tool (update_task, delete_task, or toggle_task).
+      2. After calling 'get_all_tasks', identify the task the user is referring to and then call the appropriate management tool.
       3. For adding tasks, just use 'add_task'.
       4. Always be helpful, concise, and professional.
-      5. If multiple tasks have similar names, ask the user for clarification before performing destructive actions like deletion.
-      6. Use the tools precisely. If you perform an action, confirm it to the user in a friendly way.`,
+      5. Confirm actions clearly to the user.`,
       tools: [{ functionDeclarations: taskTools }],
     },
   });
 };
 
 export const suggestTasks = async (taskTitle: string): Promise<string[]> => {
-  if (!process.env.API_KEY) return [];
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) return [];
+  
   try {
+    const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: `You are a productivity expert. For the following task: "${taskTitle}", suggest 3-4 concise, actionable sub-tasks. Return ONLY a plain JSON array of strings.`,
@@ -89,9 +98,11 @@ export const suggestTasks = async (taskTitle: string): Promise<string[]> => {
         responseMimeType: "application/json",
       }
     });
-    const parsed = JSON.parse(response.text || "[]");
+    const text = response.text || "[]";
+    const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (err) {
+    console.error("AI Suggestion Error:", err);
     return [];
   }
 };
